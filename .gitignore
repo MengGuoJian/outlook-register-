@@ -85,3 +85,13 @@ outlook-register/OutlookRegister-main/debug_out.txt
 outlook-register/OutlookRegister-main/*.png
 # 误重定向产生的 pip 安装日志残留
 outlook-register/=1.61.2
+# 域名邮箱接码配置（含管理员密钥 x-admin-auth，绝不能提交）
+outlook-register/OutlookRegister-main/domain_mail_config.json
+outlook-register/OutlookRegister-main/domain_mail_config.local.json
+# 代理池（可能含代理账号密码，绝不能提交）
+outlook-register/OutlookRegister-main/proxies.txt
+# 辅助邮箱选择器热更新覆盖文件（运行中人工修复用）
+outlook-register/OutlookRegister-main/recovery_selectors.json
+
+# 工具会话缓存
+.reasonix/

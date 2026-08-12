@@ -1,10 +1,22 @@
 import os
+import socket
+import subprocess
+import sys
 import time
 import json
 import random
 import threading
 from faker import Faker
 from abc import ABC, abstractmethod
+
+# 域名邮箱辅助验证（新功能）：缺依赖时自动降级，不影响原有注册流程
+try:
+    from recovery_email import handle_recovery_email
+    from domain_mail_client import normalize_proxy, recovery_enabled
+except ImportError:
+    handle_recovery_email = None
+    recovery_enabled = lambda: False
+    normalize_proxy = lambda s: s
 
 
 class BaseBrowserController(ABC):
@@ -19,6 +31,14 @@ class BaseBrowserController(ABC):
         self.max_captcha_retries = data['max_captcha_retries']
         self.enable_oauth2 = data["oauth2"]['enable_oauth2']
         self.proxy = data['proxy']
+        # 代理池：config.json 的 proxies 字段 + 同目录 proxies.txt（每行一个，支持 # 注释）
+        # 每个注册任务会随机抽一个代理；池为空时回退到单代理 proxy
+        self.proxy_pool = self._load_proxy_pool(data)
+        # 本地池转发器模式：走 pool_forwarder.py（HTTP/1.0 CONNECT 改写 + 池内随机端口）
+        self.use_pool_forwarder = bool(data.get("use_pool_forwarder", False))
+        # 已用过的池端口（每个任务不重复抽取；抽完一轮后重置）
+        self._used_pool_ports = set()
+        self._used_pool_lock = threading.Lock()
         self.email_suffix = data['email_suffix']
 
         # 指纹浏览器配置
@@ -32,6 +52,139 @@ class BaseBrowserController(ABC):
         self.results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Results')
         os.makedirs(self.results_dir, exist_ok=True)
 
+    def _load_proxy_pool(self, data):
+        """合并 config.json 的 proxies 字段与 proxies.txt 文件（去重保序）"""
+        pool = []
+        proxies_cfg = data.get('proxies') or []
+        if isinstance(proxies_cfg, str):
+            proxies_cfg = [proxies_cfg]
+        pool.extend(normalize_proxy(p) for p in proxies_cfg if p and str(p).strip())
+
+        txt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'proxies.txt')
+        if os.path.exists(txt_path):
+            with open(txt_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        pool.append(normalize_proxy(line))
+
+        seen, dedup = set(), []
+        for p in pool:
+            if p not in seen:
+                seen.add(p)
+                dedup.append(p)
+        return dedup
+
+    def pick_proxy(self):
+        """返回当前任务使用的代理。
+
+        转发器模式：为当前任务起一个专用转发器（锁定一个未用过的池端口，
+        该任务所有连接走同一出口 IP）；否则从代理池随机抽；池为空时返回单代理。
+        """
+        if self.use_pool_forwarder:
+            return self._spawn_task_forwarder()
+        if self.proxy_pool:
+            chosen = random.choice(self.proxy_pool)
+            self.thread_local.proxy = chosen
+            print(f"[Proxy] 本任务代理: {chosen}")
+            return chosen
+        return self.proxy
+
+    def _spawn_task_forwarder(self):
+        """为当前任务起专用转发器：随机挑一个未用过的池端口，锁定给本任务。"""
+        proc = getattr(self.thread_local, "forwarder_proc", None)
+        if proc is not None and proc.poll() is None:
+            return getattr(self.thread_local, "forwarder_proxy", "http://127.0.0.1:8899")
+
+        pool = self.proxy_pool
+        if not pool:
+            return self.proxy
+
+        with self._used_pool_lock:
+            available = [p for p in pool if p not in self._used_pool_ports]
+            if not available:  # 一轮用完，重置再来
+                self._used_pool_ports = set()
+                available = list(pool)
+            chosen = random.choice(available)
+            self._used_pool_ports.add(chosen)
+        host = chosen.rsplit(":", 1)[0].replace("http://", "").replace("https://", "")
+        port = int(chosen.rsplit(":", 1)[1])
+
+        # 找空闲本地监听端口
+        local_port = None
+        for _ in range(30):
+            candidate = random.randint(20000, 28000)
+            try:
+                probe = socket.create_connection(("127.0.0.1", candidate), timeout=0.3)
+                probe.close()
+            except Exception:
+                local_port = candidate
+                break
+        if local_port is None:
+            return self.proxy
+
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pool_forwarder.py")
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, script, "--listen", f"127.0.0.1:{local_port}",
+                 "--fixed", str(port)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception as e:
+            print(f"[Proxy] 启动任务转发器失败: {e}")
+            return self.proxy
+
+        for _ in range(30):  # 等转发器监听就绪
+            try:
+                probe = socket.create_connection(("127.0.0.1", local_port), timeout=0.3)
+                probe.close()
+                break
+            except Exception:
+                time.sleep(0.2)
+
+        self.thread_local.forwarder_proc = proc
+        self.thread_local.forwarder_proxy = f"http://127.0.0.1:{local_port}"
+        print(f"[Proxy] 任务转发器: 127.0.0.1:{local_port} -> 池端口 {port}")
+        return self.thread_local.forwarder_proxy
+
+    def kill_task_forwarder(self):
+        """任务结束清理：停掉本任务专用转发器"""
+        proc = getattr(self.thread_local, "forwarder_proc", None)
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            try:
+                delattr(self.thread_local, "forwarder_proc")
+            except AttributeError:
+                pass
+            try:
+                delattr(self.thread_local, "forwarder_proxy")
+            except AttributeError:
+                pass
+
+    def proxy_settings(self, proxy_str):
+        """把代理字符串转成 playwright 的 proxy 配置，支持 http://user:pass@host:port 及四段式"""
+        proxy_str = normalize_proxy(proxy_str)
+        if not proxy_str:
+            return None
+        settings = {"server": proxy_str, "bypass": "localhost"}
+        if "://" in proxy_str and "@" in proxy_str:
+            scheme, rest = proxy_str.split("://", 1)
+            if "@" in rest:
+                cred, hostport = rest.rsplit("@", 1)
+                if ":" in cred:
+                    user, pwd = cred.split(":", 1)
+                    settings = {
+                        "server": f"{scheme}://{hostport}",
+                        "username": user,
+                        "password": pwd,
+                        "bypass": "localhost",
+                    }
+        return settings
 
     def get_last_pos(self):
         """获取当前线程的上一次鼠标位置 (x, y)"""
@@ -168,9 +321,9 @@ class BaseBrowserController(ABC):
         day = str(random.randint(1, 28))
 
         try:
-            page.goto("https://outlook.live.com/mail/0/?prompt=create_account", timeout=20000, wait_until="domcontentloaded")
+            page.goto("https://outlook.live.com/mail/0/?prompt=create_account", timeout=30000, wait_until="domcontentloaded")
             consent_btn = page.get_by_text('同意并继续')
-            consent_btn.wait_for(timeout=30000)
+            consent_btn.wait_for(timeout=60000)
             start_time = time.time()
             self.wait_random_ratio(page, 0.06)
             self.smooth_click(page, consent_btn)
@@ -266,6 +419,14 @@ class BaseBrowserController(ABC):
         with open(filename, 'a', encoding='utf-8') as f:
             f.write(f"{email}{self.email_suffix}: {password}\n")
         print(f'[Success: Email Registration] - {email}{self.email_suffix}: {password}')
+
+        # 辅助邮箱验证：注册成功后 Outlook 会要求添加辅助邮箱并发送验证码，
+        # 用域名邮箱接收并回填（可通过 domain_mail_config.json 的 enable_recovery_email 关闭）
+        if handle_recovery_email is not None and recovery_enabled():
+            try:
+                handle_recovery_email(page, f"{email}{self.email_suffix}")
+            except Exception as e:
+                print(f"[Recovery] 辅助邮箱步骤异常（不影响注册结果）: {e}")
 
         if not self.enable_oauth2:
             return True

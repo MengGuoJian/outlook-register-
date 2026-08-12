@@ -1,0 +1,9 @@
+{
+    "api_base": "https://mail.tmp7k2x.top",
+    "domain": "tmp7k2x.top",
+    "create_path": "/api/new_address",
+    "admin_key": "",
+    "enable_recovery_email": true,
+    "mail_poll_interval": 5,
+    "mail_timeout": 240
+}

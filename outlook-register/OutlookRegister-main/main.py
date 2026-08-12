@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import json
 from get_token import get_access_token
@@ -6,6 +7,37 @@ from concurrent.futures import ThreadPoolExecutor
 from utils import random_email, generate_strong_password
 from controllers.patchright_controller import PatchrightController
 from controllers.playwright_controller import PlaywrightController
+
+
+class _Tee:
+    """print 同时输出到终端和 Results/register_run.log（供可视化面板读取）"""
+
+    def __init__(self, path):
+        self._path = path
+        self._term = sys.stdout
+
+    def write(self, msg):
+        # 终端编码（如 GBK）不兼容时降级为替换字符，绝不让日志写入崩溃整个流程
+        try:
+            self._term.write(msg)
+        except Exception:
+            try:
+                enc = getattr(self._term, "encoding", None) or "utf-8"
+                safe = msg.encode(enc, errors="replace").decode(enc, errors="replace")
+                self._term.write(safe)
+            except Exception:
+                pass
+        try:
+            with open(self._path, "a", encoding="utf-8") as f:
+                f.write(msg)
+        except Exception:
+            pass
+
+    def flush(self):
+        try:
+            self._term.flush()
+        except Exception:
+            pass
 
 
 
@@ -37,8 +69,23 @@ def process_single_flow(controller):
         token_result = get_access_token(page, email)
         if token_result[0]:
             refresh_token, access_token, expire_at =  token_result
-            with open(os.path.join(os.path.dirname(__file__), 'Results', 'outlook_token.txt'), 'a', encoding='utf-8') as f2:
-                f2.write(f"{email}{controller.email_suffix}---{password}---{refresh_token}---{access_token}---{expire_at}\n") 
+            results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Results')
+
+            # 旧格式（outlook_token.txt）：email---password---refresh_token---access_token---expire_at
+            with open(os.path.join(results_dir, 'outlook_token.txt'), 'a', encoding='utf-8') as f2:
+                f2.write(f"{email}{controller.email_suffix}---{password}---{refresh_token}---{access_token}---{expire_at}\n")
+
+            # 四段格式（verified_tokens.txt）：email----password----client_id----refresh_token
+            # 辅助邮箱验证结束后统一按此格式整理，供后续业务直接使用
+            try:
+                with open('config.json', 'r', encoding='utf-8') as f3:
+                    _cfg = json.load(f3)
+                client_id = _cfg.get('oauth2', {}).get('client_id', '')
+            except Exception:
+                client_id = ''
+            with open(os.path.join(results_dir, 'verified_tokens.txt'), 'a', encoding='utf-8') as f4:
+                f4.write(f"{email}{controller.email_suffix}----{password}----{client_id}----{refresh_token}\n")
+
             print(f'[Success: TokenAuth] - {email}{controller.email_suffix}')
             return True
         else:
@@ -91,7 +138,10 @@ if __name__ == "__main__":
 
     with open('config.json', 'r', encoding='utf-8') as f:
         data = json.load(f) 
-    os.makedirs("Results", exist_ok=True)
+    results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Results')
+    os.makedirs(results_dir, exist_ok=True)
+    # 运行日志：终端 + Results/register_run.log 双写
+    sys.stdout = _Tee(os.path.join(results_dir, 'register_run.log'))
 
     max_tasks = data["max_tasks"]
     concurrent_flows = data["concurrent_flows"]

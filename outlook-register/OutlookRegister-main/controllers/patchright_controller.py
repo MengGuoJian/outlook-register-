@@ -14,15 +14,13 @@ class PatchrightController(BaseBrowserController):
 
             p = sync_playwright().start()
 
-            proxy_settings = {
-                "server": self.proxy,
-                "bypass": "localhost",
-            } if self.proxy else None
+            # 代理池模式浏览器不带代理，每个任务建独立上下文时随机分配
+            launch_proxy = None if self.proxy_pool else self.proxy_settings(self.proxy)
 
             b = p.chromium.launch(
                 headless=False,
                 args=['--lang=zh-CN'],
-                proxy=proxy_settings
+                proxy=launch_proxy,
             )
 
             return p, b
@@ -117,15 +115,24 @@ class PatchrightController(BaseBrowserController):
 
     def get_thread_page(self):
         browser = self.get_thread_browser()
-        context = browser.new_context()
+        # 代理池模式：每个任务随机抽一个代理建独立上下文（CDP 连接同样支持）
+        if self.proxy_pool:
+            context = browser.new_context(proxy=self.proxy_settings(self.pick_proxy()))
+        else:
+            context = browser.new_context()
         return context.new_page()
 
     def clean_up(self, page=None, type="all_browser"):
         if type == "done_browser" and page:
             context = page.context
-            context.close()
+            try:
+                context.close()
+            except Exception:
+                pass
+            self.kill_task_forwarder()
 
         elif type == "all_browser":
+            self.kill_task_forwarder()
             for p, b in self.active_resources:
                 try:
                     b.close()

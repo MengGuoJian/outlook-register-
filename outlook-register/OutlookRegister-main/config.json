@@ -1,11 +1,13 @@
 {
-    "choose_browser": "playwright",
+    "choose_browser": "patchright",
     "email_suffix": "@outlook.com",
     "proxy": "http://127.0.0.1:7897",
+    "proxies": [],
+    "use_pool_forwarder": true,
     "bot_protection_wait": 16,
     "max_captcha_retries": 3,
     "concurrent_flows": 1,
-    "max_tasks": 1,
+    "max_tasks": 10,
     "oauth2": {
         "enable_oauth2": true,
         "client_id": "126f56a3-2404-41f5-9441-da03dc20775d",
@@ -19,7 +21,7 @@
         ]
     },
     "playwright": {
-        "browser_path": "C:\\Users\\meng\\AppData\\Local\\Chromium\\Application\\chrome.exe",
+        "browser_path": "",
         "browser_args": [
             "--fingerprint=1000",
             "--user-data-dir=D:\\profiles\\outlook_reg",

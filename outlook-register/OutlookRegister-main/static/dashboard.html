@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OutlookRegister Panel</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel2: #273549;
+    --border: #334155; --text: #e2e8f0; --muted: #94a3b8;
+    --green: #22c55e; --blue: #3b82f6; --yellow: #eab308;
+    --red: #ef4444; --gray: #64748b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; padding: 20px; }
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 20px; }
+  .badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; }
+  .badge.run { background: #052e16; color: var(--green); border: 1px solid var(--green); }
+  .badge.stop { background: #1e1b0d; color: var(--yellow); border: 1px solid var(--yellow); }
+  .cfg { color: var(--muted); font-size: 12px; }
+  .btn { padding: 7px 16px; border-radius: 8px; border: 1px solid var(--border);
+         background: var(--panel2); color: var(--text); cursor: pointer; font-size: 13px; }
+  .btn:hover { background: #334155; }
+  .btn.primary { background: var(--green); color: #052e16; border-color: var(--green); font-weight: 600; }
+  .btn.danger { background: var(--red); color: #fff; border-color: var(--red); }
+  .btn:disabled { opacity: 0.6; cursor: wait; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; }
+  .card .num { font-size: 26px; font-weight: 700; }
+  .card .lbl { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .card.verified .num { color: var(--green); }
+  .card.waiting .num { color: var(--blue); }
+  .card.failed .num { color: var(--red); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+  .panel h2 { font-size: 15px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+  .toolbar { display: flex; gap: 8px; align-items: center; }
+  input[type=text], textarea { background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+                               border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+  textarea { width: 100%; resize: vertical; font-family: Consolas, monospace; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  tr:hover td { background: var(--panel2); }
+  .code { font-family: Consolas, monospace; background: #0f172a; padding: 2px 8px; border-radius: 6px; color: var(--yellow); }
+  .copy { cursor: pointer; color: var(--blue); margin-left: 6px; font-size: 12px; }
+  .st { padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+  .st-created { background: #1e293b; color: var(--muted); border: 1px solid var(--gray); }
+  .st-code_received { background: #172554; color: var(--blue); border: 1px solid var(--blue); }
+  .st-verified { background: #052e16; color: var(--green); border: 1px solid var(--green); }
+  .st-skipped { background: #1e1b0d; color: var(--yellow); border: 1px solid var(--yellow); }
+  .st-failed { background: #2a0a0a; color: var(--red); border: 1px solid var(--red); }
+  .empty { color: var(--muted); text-align: center; padding: 24px; }
+  #log { height: 260px; overflow-y: auto; background: #0b1120; border: 1px solid var(--border);
+         border-radius: 8px; padding: 10px; font: 12px/1.6 Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
+  #log .t { color: var(--muted); }
+  .log-ctrl { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📊 OutlookRegister Panel</h1>
+  <span id="runBadge" class="badge stop">Unknown</span>
+  <button id="btnStart" class="btn primary">▶ Start Registration</button>
+  <button id="btnStop" class="btn danger">■ Stop</button>
+  <span class="cfg" id="cfgLine"></span>
+</header>
+
+<div class="cards">
+  <div class="card"><div class="num" id="cOutlook">0</div><div class="lbl">Total Outlook Emails</div></div>
+  <div class="card verified"><div class="num" id="cVerified">0</div><div class="lbl">Verified</div></div>
+  <div class="card waiting"><div class="num" id="cWaiting">0</div><div class="lbl">Created / Awaiting Code</div></div>
+  <div class="card failed"><div class="num" id="cFailed">0</div><div class="lbl">Failed / Skipped</div></div>
+</div>
+
+<div class="panel">
+  <h2>
+    <span>Proxy Pool</span>
+    <span class="toolbar">
+      <button class="btn" id="btnProxyTest">Test Connectivity</button>
+      <button class="btn primary" id="btnProxySave">Save Proxy Pool</button>
+    </span>
+  </h2>
+  <textarea id="proxyText" rows="5" spellcheck="false"
+    placeholder="One proxy per line. Formats:&#10;  http://host:port | http://user:pass@host:port | host:port:user:pass (cliproxy style)&#10;Saved into proxies.txt (auto-deduplicated). Each registration task picks one at random."></textarea>
+  <div class="cfg" id="proxyStatus" style="margin-top:8px"></div>
+  <div id="proxyResult" style="margin-top:8px; font-size:13px"></div>
+</div>
+
+<div class="panel">
+  <h2>
+    <span>Outlook ↔ Domain Email Mapping</span>
+    <span class="toolbar">
+      <input type="text" id="search" placeholder="Search emails...">
+      <button class="btn" id="btnRefresh">Refresh</button>
+    </span>
+  </h2>
+  <div style="overflow-x:auto">
+  <table id="mapTable">
+    <thead><tr>
+      <th>Time</th><th>Outlook Email</th><th>Domain Email</th><th>Code</th><th>Status</th><th>Note</th>
+    </tr></thead>
+    <tbody id="mapBody"><tr><td colspan="6" class="empty">No data yet — mappings appear here automatically once registration runs</td></tr></tbody>
+  </table>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>
+    <span>Live Log</span>
+    <span class="log-ctrl">
+      <label><input type="checkbox" id="autoScroll" checked> Auto-scroll</label>
+      <button class="btn" id="btnClearLog">Clear</button>
+    </span>
+  </h2>
+  <div id="log"></div>
+</div>
+
+<footer>Data sources: Results/email_mappings.jsonl (mappings) + Results/register_run.log (log) · Panel port 8766</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+let logSize = 0, allRows = [];
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function fetchJSON(url, opts) {
+  try {
+    const r = await fetch(url, opts);
+    return await r.json();
+  } catch (e) { return null; }
+}
+
+function statusClass(s) { return "st-" + (s || ""); }
+
+function renderRows(rows) {
+  const body = $("mapBody");
+  const q = $("search").value.trim().toLowerCase();
+  const filtered = q ? rows.filter(r =>
+    (r.outlook_email || "").toLowerCase().includes(q) ||
+    (r.domain_email || "").toLowerCase().includes(q)) : rows;
+  if (!filtered.length) {
+    body.innerHTML = '<tr><td colspan="6" class="empty">' + (q ? "No matching records" : "No data yet") + "</td></tr>";
+    return;
+  }
+  body.innerHTML = filtered.map(r => `
+    <tr>
+      <td>${esc(r.time_str)}</td>
+      <td>${esc(r.outlook_email)}</td>
+      <td>${esc(r.domain_email)}</td>
+      <td>${r.code ? `<span class="code">${esc(r.code)}</span><span class="copy" onclick="copyCode('${esc(r.code)}', this)">Copy</span>` : "-"}</td>
+      <td><span class="st ${statusClass(r.status)}">${esc(r.status_label || r.status)}</span></td>
+      <td>${esc(r.note)}</td>
+    </tr>`).join("");
+}
+
+async function loadMappings() {
+  const data = await fetchJSON("/api/mappings");
+  if (!data || !data.ok) return;
+  allRows = data.items || [];
+  renderRows(allRows);
+}
+
+async function loadStats() {
+  const data = await fetchJSON("/api/stats");
+  if (!data || !data.ok) return;
+  const by = data.by_status || {};
+  $("cOutlook").textContent = data.outlook_total || 0;
+  $("cVerified").textContent = data.verified || 0;
+  $("cWaiting").textContent = (by.created || 0) + (by.code_received || 0);
+  $("cFailed").textContent = (by.failed || 0) + (by.skipped || 0);
+  const run = data.run || {};
+  const badge = $("runBadge");
+  if (run.running) { badge.className = "badge run"; badge.textContent = "● Running (PID " + run.pid + ")"; }
+  else { badge.className = "badge stop"; badge.textContent = "○ Stopped"; }
+  const c = data.config || {};
+  $("cfgLine").textContent = c.api_base ? `Mail service: ${c.api_base} · Domain ${c.domain} · Proxy pool ${c.proxy_count || 0}${c.recovery_enabled ? "" : " · Recovery email disabled"}` : "Domain mail service not configured";
+}
+
+async function loadLog() {
+  const data = await fetchJSON("/api/log?since=" + logSize);
+  if (!data || !data.ok) return;
+  logSize = data.size || 0;
+  if (!data.lines || !data.lines.length) return;
+  const box = $("log");
+  const now = new Date().toTimeString().slice(0, 8);
+  const auto = $("autoScroll").checked;
+  for (const ln of data.lines) {
+    const div = document.createElement("div");
+    div.innerHTML = `<span class="t">[${now}]</span> ${esc(ln)}`;
+    box.appendChild(div);
+  }
+  while (box.children.length > 1000) box.removeChild(box.firstChild);
+  if (auto) box.scrollTop = box.scrollHeight;
+}
+
+function copyCode(code, el) {
+  navigator.clipboard.writeText(code).then(() => {
+    el.textContent = "Copied";
+    setTimeout(() => el.textContent = "Copy", 1500);
+  }).catch(() => {});
+}
+
+// ── Proxy pool ──
+async function loadProxies() {
+  const d = await fetchJSON("/api/proxies");
+  if (!d || !d.ok) return;
+  $("proxyText").value = (d.txt || []).join("\n");
+  const extra = [];
+  if (d.cfg && d.cfg.length) extra.push("config.json proxies (read-only): " + d.cfg.join(" "));
+  if (d.single) extra.push("Single-proxy fallback: " + d.single);
+  $("proxyStatus").textContent = extra.length ? extra.join(" · ") : "Proxy pool is empty (will fall back to the single proxy in config.json)";
+  $("proxyResult").innerHTML = "";
+}
+$("btnProxySave").onclick = async () => {
+  const r = await fetchJSON("/api/proxies", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: $("proxyText").value }),
+  });
+  $("proxyStatus").textContent = r && r.ok ? `Saved ${r.count} proxies to proxies.txt` : "Save failed";
+  if (r && r.ok) loadProxies();
+};
+$("btnProxyTest").onclick = async () => {
+  const btn = $("btnProxyTest");
+  btn.disabled = true;
+  btn.textContent = "Testing...";
+  const r = await fetchJSON("/api/proxies/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: $("proxyText").value }),
+  });
+  btn.disabled = false;
+  btn.textContent = "Test Connectivity";
+  if (!r || !r.ok) { $("proxyResult").innerHTML = "Test failed"; return; }
+  $("proxyResult").innerHTML = (r.results || []).map(x => {
+    const tag = x.ok
+      ? '<span style="color:var(--green)">✅ OK · egress ' + esc(x.ip) + "</span>"
+      : '<span style="color:var(--red)">❌ Unreachable</span>' + (x.error ? ' <span class="cfg">' + esc(x.error) + "</span>" : "");
+    return '<div style="padding:2px 0">' + esc(x.proxy) + " → " + tag + "</div>";
+  }).join("") || '<span class="cfg">(nothing to test)</span>';
+};
+
+$("btnStart").onclick = async () => {
+  const r = await fetchJSON("/api/run/start", { method: "POST" });
+  if (!r || !r.ok) alert(r && r.message || "Failed to start");
+};
+$("btnStop").onclick = async () => { await fetchJSON("/api/run/stop", { method: "POST" }); };
+$("btnRefresh").onclick = loadMappings;
+$("search").oninput = () => renderRows(allRows);
+$("btnClearLog").onclick = () => { $("log").innerHTML = ""; logSize = 0; };
+
+setInterval(loadMappings, 3000);
+setInterval(loadStats, 3000);
+setInterval(loadLog, 2000);
+loadMappings(); loadStats(); loadLog(); loadProxies();
+</script>
+</body>
+</html>
