@@ -71,20 +71,20 @@ def process_single_flow(controller):
             refresh_token, access_token, expire_at =  token_result
             results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Results')
 
-            # 旧格式（outlook_token.txt）：email---password---refresh_token---access_token---expire_at
-            with open(os.path.join(results_dir, 'outlook_token.txt'), 'a', encoding='utf-8') as f2:
-                f2.write(f"{email}{controller.email_suffix}---{password}---{refresh_token}---{access_token}---{expire_at}\n")
-
-            # 四段格式（verified_tokens.txt）：email----password----client_id----refresh_token
-            # 辅助邮箱验证结束后统一按此格式整理，供后续业务直接使用
+            # 统一格式（accounts.txt）：email----password----client_id----refresh_token
+            # 辅助邮箱验证结束后按此格式落盘，一个账号一行，方便整理
             try:
                 with open('config.json', 'r', encoding='utf-8') as f3:
                     _cfg = json.load(f3)
                 client_id = _cfg.get('oauth2', {}).get('client_id', '')
             except Exception:
                 client_id = ''
-            with open(os.path.join(results_dir, 'verified_tokens.txt'), 'a', encoding='utf-8') as f4:
+            with open(os.path.join(results_dir, 'accounts.txt'), 'a', encoding='utf-8') as f4:
                 f4.write(f"{email}{controller.email_suffix}----{password}----{client_id}----{refresh_token}\n")
+
+            # 旧格式（outlook_token.txt）：email---password---refresh_token---access_token---expire_at
+            with open(os.path.join(results_dir, 'outlook_token.txt'), 'a', encoding='utf-8') as f2:
+                f2.write(f"{email}{controller.email_suffix}---{password}---{refresh_token}---{access_token}---{expire_at}\n")
 
             print(f'[Success: TokenAuth] - {email}{controller.email_suffix}')
             return True

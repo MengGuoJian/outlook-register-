@@ -38,7 +38,8 @@ Outlook 注册机
 
    - `Results/email_mappings.jsonl`（机器可读，面板数据源）
    - `Results/email_mappings.csv`（Excel 可直接打开，每个 Outlook 邮箱一行最新状态）
-5. OAuth token 获取成功后，账号按 `email----password----client_id----refresh_token` 四段格式追加到 `Results/verified_tokens.txt`（辅助邮箱验证结束后统一整理）
+5. OAuth token 获取成功后，账号按 `email----password----client_id----refresh_token` 四段格式追加到 `Results/accounts.txt`（辅助邮箱验证结束后统一整理；一个账号一行）
+6. 历史数据统一整理：`python consolidate_accounts.py` —— 合并 verified_tokens.txt / outlook_token.txt / logged_email.txt 三种旧格式到 `Results/accounts.txt`（按邮箱去重，优先保留带 refresh_token 的记录）
 
 ### 代理池（推荐）
 
