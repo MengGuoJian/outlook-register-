@@ -87,14 +87,18 @@ def main():
         add(*parse_logged(line, default_client_id))
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    kept = 0
     with open(args.out, "w", encoding="utf-8") as f:
         for email in sorted(accounts):
             password, client_id, refresh = accounts[email]
+            if not refresh:
+                continue  # 无 refresh_token 的账号不保留
             f.write(f"{email}----{password}----{client_id}----{refresh}\n")
+            kept += 1
 
     with_token = sum(1 for v in accounts.values() if v[2])
     print(f"✅ 已整理 {len(accounts)} 个账号 -> {args.out}")
-    print(f"   其中 {with_token} 个带 refresh_token，{len(accounts) - with_token} 个无 token（仅 email:password）")
+    print(f"   保留 {kept} 个带 refresh_token 的账号，丢弃 {len(accounts) - kept} 个无 token 的账号")
 
 
 if __name__ == "__main__":
