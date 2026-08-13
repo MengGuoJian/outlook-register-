@@ -79,6 +79,7 @@
   <h2>
     <span>Proxy Pool</span>
     <span class="toolbar">
+      <label class="cfg"><input type="checkbox" id="proxyViaClash"> via Clash (for cliproxy)</label>
       <button class="btn" id="btnProxyTest">Test Connectivity</button>
       <button class="btn primary" id="btnProxySave">Save Proxy Pool</button>
     </span>
@@ -233,7 +234,7 @@ $("btnProxyTest").onclick = async () => {
   const r = await fetchJSON("/api/proxies/test", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: $("proxyText").value }),
+    body: JSON.stringify({ text: $("proxyText").value, via_clash: $("proxyViaClash").checked }),
   });
   btn.disabled = false;
   btn.textContent = "Test Connectivity";

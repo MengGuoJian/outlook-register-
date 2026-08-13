@@ -27,7 +27,13 @@ DEFAULT_POOL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pr
 
 
 def load_pool(pool_file: str) -> list[dict]:
-    """读取代理池，返回 [{host, port, username, password}]"""
+    """读取代理池，返回 [{host, port, username, password}]
+
+    支持三种条目格式：
+        http://host:port
+        http://user:pass@host:port
+        host:port:user:pass
+    """
     entries = []
     if not os.path.exists(pool_file):
         return entries
@@ -37,9 +43,15 @@ def load_pool(pool_file: str) -> list[dict]:
             if not line or line.startswith("#"):
                 continue
             line = line.replace("http://", "", 1).replace("https://", "", 1)
+            username = password = ""
+            if "@" in line:
+                userinfo, line = line.rsplit("@", 1)
+                if ":" in userinfo:
+                    username, password = userinfo.split(":", 1)
             parts = line.split(":")
             if len(parts) == 2 and parts[1].isdigit():
-                entries.append({"host": parts[0], "port": int(parts[1])})
+                entries.append({"host": parts[0], "port": int(parts[1]),
+                                "username": username, "password": password})
             elif len(parts) == 4 and parts[1].isdigit():
                 entries.append({
                     "host": parts[0], "port": int(parts[1]),
@@ -76,17 +88,63 @@ def _relay(a: socket.socket, b: socket.socket) -> None:
                 pass
 
 
-def _try_forward(entry: dict, target_host: str, target_port: int) -> socket.socket | None:
-    """连池端口，发 HTTP/1.0 无头 CONNECT；成功返回已建立隧道的 socket"""
+def _tunnel_via_clash(upstream: tuple[str, int], target: tuple[str, int]) -> socket.socket | None:
+    """经 Clash HTTP 代理建立到 target 的 TCP 隧道（用于 cliproxy 等拒绝直连来源的代理）"""
     try:
-        s = socket.create_connection((entry["host"], entry["port"]), timeout=15)
-        req = f"CONNECT {target_host}:{target_port} HTTP/1.0\r\n".encode()
-        if entry.get("username"):
-            token = base64.b64encode(
-                f"{entry['username']}:{entry['password']}".encode()).decode()
-            req += f"Proxy-Authorization: Basic {token}\r\n".encode()
-        req += b"\r\n"
-        s.sendall(req)
+        s = socket.create_connection(upstream, timeout=15)
+        s.sendall(f"CONNECT {target[0]}:{target[1]} HTTP/1.1\r\n"
+                  f"Host: {target[0]}:{target[1]}\r\n\r\n".encode())
+        s.settimeout(15)
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        if b" 200" in buf.split(b"\r\n", 1)[0]:
+            return s
+        s.close()
+    except Exception:
+        pass
+    return None
+
+
+def _inject_auth(req: bytes, entry: dict) -> bytes:
+    """把池条目的账密作为 Proxy-Authorization 注入客户端原始请求（已有则替换）"""
+    if not entry.get("username"):
+        return req
+    token = base64.b64encode(f"{entry['username']}:{entry['password']}".encode()).decode()
+    auth_line = f"Proxy-Authorization: Basic {token}\r\n".encode()
+    head, sep, tail = req.partition(b"\r\n\r\n")
+    lines = head.split(b"\r\n")
+    out = []
+    replaced = False
+    for ln in lines:
+        if ln.lower().startswith(b"proxy-authorization:"):
+            out.append(auth_line.rstrip(b"\r\n"))
+            replaced = True
+        else:
+            out.append(ln)
+    if not replaced:
+        out.append(auth_line.rstrip(b"\r\n"))
+    return b"\r\n".join(out) + b"\r\n\r\n" + tail
+
+
+def _try_forward(entry: dict, target_host: str, target_port: int,
+                 out_req: bytes, via_clash: str) -> socket.socket | None:
+    """连池端口并发出构造好的请求；成功返回已建立隧道的 socket。
+
+    via_clash 非空时先经 Clash（如 127.0.0.1:7897）隧道到池端口，
+    让代理服务商看到的来源 IP 变成 Clash 节点出口。
+    """
+    try:
+        if via_clash:
+            s = _tunnel_via_clash(tuple(via_clash.rsplit(":", 1)), (entry["host"], entry["port"]))
+        else:
+            s = socket.create_connection((entry["host"], entry["port"]), timeout=15)
+        if s is None:
+            return None
+        s.sendall(out_req)
         s.settimeout(15)
         buf = b""
         while b"\r\n\r\n" not in buf:
@@ -133,7 +191,18 @@ def handle(client: socket.socket, args, pool: list[dict]) -> None:
     # 随机抽池端口，失败换下一个（最多试 5 个）
     candidates = random.sample(pool, min(5, len(pool))) if pool else []
     for entry in candidates:
-        upstream = _try_forward(entry, target_host, target_port)
+        if args.raw:
+            # 原样转发客户端请求（注入池条目认证），适配 cliproxy 等标准 HTTP 代理
+            out_req = _inject_auth(req, entry)
+        else:
+            # HTTP/1.0 无头 CONNECT 改写，适配 107.151.197.81 这类特殊池
+            out_req = f"CONNECT {target_host}:{target_port} HTTP/1.0\r\n".encode()
+            if entry.get("username"):
+                token = base64.b64encode(
+                    f"{entry['username']}:{entry['password']}".encode()).decode()
+                out_req += f"Proxy-Authorization: Basic {token}\r\n".encode()
+            out_req += b"\r\n"
+        upstream = _try_forward(entry, target_host, target_port, out_req, args.via_clash)
         if upstream is not None:
             # 把网关的 200 响应回给浏览器，然后双向中继
             try:
@@ -142,7 +211,8 @@ def handle(client: socket.socket, args, pool: list[dict]) -> None:
                 upstream.close()
                 client.close()
                 return
-            print(f"[forwarder] {target_host}:{target_port} -> {entry['host']}:{entry['port']}", flush=True)
+            print(f"[forwarder] {target_host}:{target_port} -> {entry['host']}:{entry['port']}"
+                  f"{' (via clash)' if args.via_clash else ''}", flush=True)
             threading.Thread(target=_relay, args=(client, upstream), daemon=True).start()
             _relay(upstream, client)
             return
@@ -158,6 +228,8 @@ def main():
     ap.add_argument("--listen", default="127.0.0.1:8899", help="本地监听地址 (默认 127.0.0.1:8899)")
     ap.add_argument("--pool", default=DEFAULT_POOL_FILE, help="代理池文件 (默认 proxies.txt)")
     ap.add_argument("--fixed", default="", help="锁定单个池端口 (默认随机轮换)")
+    ap.add_argument("--via-clash", default="", help="经 Clash 隧道连接池端口 (如 127.0.0.1:7897)，来源 IP 变为 Clash 节点出口")
+    ap.add_argument("--raw", action="store_true", help="原样转发客户端 CONNECT（注入池条目认证），适配标准 HTTP 代理")
     args = ap.parse_args()
 
     pool = load_pool(args.pool)

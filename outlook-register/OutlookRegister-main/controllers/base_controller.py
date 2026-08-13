@@ -36,6 +36,9 @@ class BaseBrowserController(ABC):
         self.proxy_pool = self._load_proxy_pool(data)
         # 本地池转发器模式：走 pool_forwarder.py（HTTP/1.0 CONNECT 改写 + 池内随机端口）
         self.use_pool_forwarder = bool(data.get("use_pool_forwarder", False))
+        # 转发器经 Clash 中转（cliproxy 等拒绝直连来源的代理用）；raw=原样转发客户端请求
+        self.pool_forwarder_via_clash = str(data.get("pool_forwarder_via_clash", "") or "")
+        self.pool_forwarder_raw = bool(data.get("pool_forwarder_raw", False))
         # 已用过的池端口（每个任务不重复抽取；抽完一轮后重置）
         self._used_pool_ports = set()
         self._used_pool_lock = threading.Lock()
@@ -124,10 +127,15 @@ class BaseBrowserController(ABC):
             return self.proxy
 
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pool_forwarder.py")
+        extra_args = []
+        if self.pool_forwarder_via_clash:
+            extra_args += ["--via-clash", self.pool_forwarder_via_clash]
+        if self.pool_forwarder_raw:
+            extra_args += ["--raw"]
         try:
             proc = subprocess.Popen(
                 [sys.executable, script, "--listen", f"127.0.0.1:{local_port}",
-                 "--fixed", str(port)],
+                 "--fixed", str(port)] + extra_args,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

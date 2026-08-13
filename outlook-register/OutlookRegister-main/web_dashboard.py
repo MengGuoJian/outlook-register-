@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import socket
@@ -40,6 +41,7 @@ app = FastAPI(title="OutlookRegister Dashboard", docs_url=None, redoc_url=None)
 
 class ProxiesReq(BaseModel):
     text: str = ""
+    via_clash: bool = False
 
 _run_proc: subprocess.Popen | None = None
 _run_lock = threading.Lock()
@@ -131,13 +133,76 @@ def api_proxies_save(req: ProxiesReq):
     return {"ok": True, "count": len(lines), "txt": lines}
 
 
+def _test_proxy_via_clash(proxy: str, timeout: float = 18) -> dict:
+    """经 Clash 隧道连接目标代理，发认证请求取出口 IP。
+
+    用于 cliproxy 等拒绝直连来源（来源 IP 白名单/地区限制）的代理：
+    隧道让代理看到的来源 IP 变成 Clash 节点出口。
+    """
+    from urllib.parse import unquote, urlsplit
+    try:
+        p = urlsplit(proxy if "://" in proxy else "http://" + proxy)
+        host = p.hostname
+        port = p.port or 80
+        username = unquote(p.username or "")
+        password = unquote(p.password or "")
+        if not host:
+            return {"proxy": proxy, "ok": False, "ip": "", "error": "bad proxy url"}
+
+        s = socket.create_connection(("127.0.0.1", 7897), timeout=timeout)
+        s.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
+        s.settimeout(timeout)
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            c = s.recv(4096)
+            if not c:
+                break
+            buf += c
+        if b" 200" not in buf.split(b"\r\n", 1)[0]:
+            s.close()
+            return {"proxy": proxy, "ok": False, "ip": "", "error": "clash tunnel failed"}
+
+        auth = ""
+        if username:
+            token = base64.b64encode(f"{username}:{password}".encode()).decode()
+            auth = f"Proxy-Authorization: Basic {token}\r\n"
+        s.sendall(f"GET http://api.ipify.org/ HTTP/1.1\r\nHost: api.ipify.org\r\n"
+                  f"{auth}Connection: close\r\n\r\n".encode())
+        data = b""
+        try:
+            while True:
+                c = s.recv(4096)
+                if not c:
+                    break
+                data += c
+        except socket.timeout:
+            pass
+        s.close()
+        if not data:
+            return {"proxy": proxy, "ok": False, "ip": "", "error": "no response"}
+        head, _, body = data.partition(b"\r\n\r\n")
+        status = head.split(b"\r\n", 1)[0]
+        if b" 200" not in status:
+            return {"proxy": proxy, "ok": False, "ip": "",
+                    "error": status.decode(errors="replace")[:80]}
+        ip = body.decode(errors="replace").strip().splitlines()[-1] if body else ""
+        return {"proxy": proxy, "ok": True, "ip": ip}
+    except Exception as e:
+        return {"proxy": proxy, "ok": False, "ip": "", "error": str(e)[:80]}
+
+
 @app.post("/api/proxies/test")
 def api_proxies_test(req: ProxiesReq | None = None):
-    """连通性测试：显示每个代理的出口 IP（可测文本框里还没保存的）"""
+    """连通性测试：显示每个代理的出口 IP（可测文本框里还没保存的）。
+
+    via_clash=true 时经 Clash 隧道测试（来源 IP = Clash 节点出口），
+    用于 cliproxy 等拒绝直连来源的代理。
+    """
     import concurrent.futures as _cf
     import requests as _requests
 
     pool = _parse_proxy_text(req.text) if (req and req.text) else _read_proxies_txt()
+    via_clash = bool(req and req.via_clash)
 
     def _test_one(proxy: str) -> dict:
         try:
@@ -152,7 +217,10 @@ def api_proxies_test(req: ProxiesReq | None = None):
 
     results = []
     with _cf.ThreadPoolExecutor(max_workers=6) as ex:
-        futures = [ex.submit(_test_one, p) for p in pool[:50]]
+        if via_clash:
+            futures = [ex.submit(_test_proxy_via_clash, p) for p in pool[:50]]
+        else:
+            futures = [ex.submit(_test_one, p) for p in pool[:50]]
         for fut in futures:
             results.append(fut.result())
     return {"ok": True, "results": results}
